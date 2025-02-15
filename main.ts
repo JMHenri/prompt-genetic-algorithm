@@ -10,13 +10,13 @@ async function writePromptsToCSV(prompts: Prompt[], generation: number): Promise
     score: p.score,
     generation: generation
   }));
-  
+
   const csv = Papa.unparse(data, {
-    header: true,
+    header: !await exists(csvFilePath), // Add header only if the file doesn't exist
     quotes: true // This will properly handle commas in content
   });
-  
-  await Deno.writeTextFile(csvFilePath, csv);
+
+  await Deno.writeTextFile(csvFilePath, csv, { append: true });
 }
 
 async function readPromptsFromCSV(): Promise<Prompt[]> {
@@ -118,6 +118,8 @@ async function runConversation(prompt1: Prompt, prompt2: Prompt): Promise<void> 
 }
 
 async function runTournament(prompts: Prompt[]): Promise<void> {
+  const attackPromises: Promise<void>[] = [];
+
   for (let i = 0; i < prompts.length; i++) {
     const attackTargets = [
       (i + 1) % prompts.length,
@@ -125,8 +127,14 @@ async function runTournament(prompts: Prompt[]): Promise<void> {
     ];
 
     for (const target of attackTargets) {
-      await runConversation(prompts[i], prompts[target]);
+      attackPromises.push(runConversation(prompts[i], prompts[target]));
     }
+  }
+
+  // Run attacks in parallel
+  const concurrencyLimit = 2;
+  for (let i = 0; i < attackPromises.length; i += concurrencyLimit) {
+    await Promise.all(attackPromises.slice(i, i + concurrencyLimit));
   }
 }
 

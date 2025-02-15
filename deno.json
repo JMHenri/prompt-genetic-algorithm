@@ -1,6 +1,6 @@
 {
     "tasks": {
-      "start": "deno run --env-file=.env --allow-net --allow-env main.ts"
+      "start": "deno run --env-file=.env --allow-all main.ts"
     },
     "imports": {
       "@anthropic-ai/sdk": "npm:@anthropic-ai/sdk"
