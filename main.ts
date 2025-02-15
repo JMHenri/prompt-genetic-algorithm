@@ -3,12 +3,17 @@ import { exists } from 'https://deno.land/std@0.224.0/fs/mod.ts';
 import Papa from 'https://esm.sh/papaparse@5.4.1';
 
 // Update CSV operations with Papa Parse
-async function writePromptsToCSV(prompts: Prompt[], generation: number): Promise<void> {
-  const data = prompts.map(p => ({
-    id: p.id,
-    content: p.content,
-    score: p.score,
-    generation: generation
+async function writePromptsToCSV(prompts: Prompt[], generation: number, results: { prompt1: Prompt, prompt2: Prompt, response1: string, response2: string }[]): Promise<void> {
+  const data = results.map(r => ({
+    generation: generation,
+    prompt1_id: r.prompt1.id,
+    prompt1_content: r.prompt1.content,
+    prompt1_score: r.prompt1.score,
+    response1: r.response1, // Ensure this is a string
+    prompt2_id: r.prompt2.id,
+    prompt2_content: r.prompt2.content,
+    prompt2_score: r.prompt2.score,
+    response2: r.response2 // Ensure this is a string
   }));
 
   const csv = Papa.unparse(data, {
@@ -63,62 +68,59 @@ if (initialPrompts.length === 0) {
   }));
 }
 
-async function runConversation(prompt1: Prompt, prompt2: Prompt): Promise<void> {
+async function runConversation(prompt1: Prompt, prompt2: Prompt): Promise<{ prompt1: Prompt, prompt2: Prompt, response1: string, response2: string }> {
   const messages: { role: 'user' | 'assistant'; content: string }[] = [];
-  let turns = 0;
-  const maxTurns = 1;
 
-  while (turns < maxTurns) {
-    // Prompt 1's turn
-    const response1 = await client.messages.create({
-      model: 'claude-3-sonnet-20240229',
-      max_tokens: 1024,
-      temperature: 0.2,
-      system: prompt1.content,
-      messages: messages.concat({ role: 'user', content: prompt1.content }),
-    });
+  // Prompt 1's turn
+  const response1 = await client.messages.create({
+    model: 'claude-3-sonnet-20240229',
+    max_tokens: 1024,
+    temperature: 0.2,
+    system: prompt1.content,
+    messages: messages.concat({ role: 'user', content: prompt1.content }),
+  });
 
-    const response1Text = response1.content.map(block => block).join(' ').toLowerCase();
-    messages.push({ role: 'assistant', content: response1Text });
+  const response1Text = response1.content.map(block => block).join(' ').toLowerCase();
+  messages.push({ role: 'assistant', content: response1Text });
 
-    // Check for target phrases in response1 with penalties
-    if (response1Text.includes('i love you')) {
-      prompt1.score++;
-      prompt2.score -= 2; // Penalty for using the phrase
-    }
-    if (response1Text.includes('i hate you')) {
-      prompt2.score += 2;
-      prompt2.score -= 2; // Penalty for using the phrase
-    }
-
-    // Prompt 2's turn
-    const response2 = await client.messages.create({
-      model: 'claude-3-sonnet-20240229',
-      max_tokens: 1024,
-      temperature: 0.2,
-      system: prompt2.content,
-      messages: messages.concat({ role: 'user', content: prompt2.content }),
-    });
-
-    const response2Text = response2.content.map(block => block).join(' ').toLowerCase();
-    messages.push({ role: 'assistant', content: response2Text });
-
-    // Check for target phrases in response2 with penalties
-    if (response2Text.includes('i love you')) {
-      prompt1.score++;
-      prompt2.score -= 2; // Penalty for using the phrase
-    }
-    if (response2Text.includes('i hate you')) {
-      prompt2.score += 2;
-      prompt2.score -= 2; // Penalty for using the phrase
-    }
-
-    turns++;
+  // Check for target phrases in response1 with penalties
+  if (response1Text.includes('i love you')) {
+    prompt1.score++;
+    prompt2.score -= 2; // Penalty for using the phrase
   }
+  if (response1Text.includes('i hate you')) {
+    prompt2.score += 2;
+    prompt1.score -= 2; // Penalty for using the phrase
+  }
+
+  // Prompt 2's turn
+  const response2 = await client.messages.create({
+    model: 'claude-3-sonnet-20240229',
+    max_tokens: 1024,
+    temperature: 0.2,
+    system: prompt2.content,
+    messages: messages.concat({ role: 'user', content: prompt2.content }),
+  });
+
+  const response2Text = response2.content.map(block => block).join(' ').toLowerCase();
+  messages.push({ role: 'assistant', content: response2Text });
+
+  // Check for target phrases in response2 with penalties
+  if (response2Text.includes('i love you')) {
+    prompt1.score++;
+    prompt2.score -= 2; // Penalty for using the phrase
+  }
+  if (response2Text.includes('i hate you')) {
+    prompt2.score += 2;
+    prompt1.score -= 2; // Penalty for using the phrase
+  }
+
+
+  return { prompt1, prompt2, response1: response1Text, response2: response2Text };
 }
 
-async function runTournament(prompts: Prompt[]): Promise<void> {
-  const attackPromises: Promise<void>[] = [];
+async function runTournament(prompts: Prompt[]): Promise<{ prompt1: Prompt, prompt2: Prompt, response1: string, response2: string }[]> {
+  const attackPromises: Promise<{ prompt1: Prompt, prompt2: Prompt, response1: string, response2: string }>[] = [];
 
   for (let i = 0; i < prompts.length; i++) {
     const attackTargets = [
@@ -133,9 +135,13 @@ async function runTournament(prompts: Prompt[]): Promise<void> {
 
   // Run attacks in parallel
   const concurrencyLimit = 2;
+  const results: { prompt1: Prompt, prompt2: Prompt, response1: string, response2: string }[] = [];
   for (let i = 0; i < attackPromises.length; i += concurrencyLimit) {
-    await Promise.all(attackPromises.slice(i, i + concurrencyLimit));
+    const batchResults = await Promise.all(attackPromises.slice(i, i + concurrencyLimit));
+    results.push(...batchResults);
   }
+
+  return results;
 }
 
 function createChildren(prompt1: Prompt, prompt2: Prompt): [Prompt, Prompt] {
@@ -182,7 +188,7 @@ async function evolvePrompts(generations: number): Promise<void> {
     prompts.forEach(p => p.score = 0);
     
     // Run tournament
-    await runTournament(prompts);
+    const results = await runTournament(prompts);
     
     // Sort by score
     prompts.sort((a, b) => b.score - a.score);
@@ -197,8 +203,8 @@ async function evolvePrompts(generations: number): Promise<void> {
     const children = createChildren(prompts[0], prompts[1]);
     prompts.push(...children);
 
-    // Write prompts to CSV
-    await writePromptsToCSV(prompts, gen + 1);
+    // Write prompts and results to CSV
+    await writePromptsToCSV(prompts, gen + 1, results);
   }
 
   console.log('Evolution complete');
