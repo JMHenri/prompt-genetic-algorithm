@@ -1,4 +1,42 @@
 import Anthropic from 'https://esm.sh/@anthropic-ai/sdk@0.36.3';
+import { exists } from 'https://deno.land/std@0.224.0/fs/mod.ts';
+import Papa from 'https://esm.sh/papaparse@5.4.1';
+
+// Update CSV operations with Papa Parse
+async function writePromptsToCSV(prompts: Prompt[], generation: number): Promise<void> {
+  const data = prompts.map(p => ({
+    id: p.id,
+    content: p.content,
+    score: p.score,
+    generation: generation
+  }));
+  
+  const csv = Papa.unparse(data, {
+    header: true,
+    quotes: true // This will properly handle commas in content
+  });
+  
+  await Deno.writeTextFile(csvFilePath, csv);
+}
+
+async function readPromptsFromCSV(): Promise<Prompt[]> {
+  const prompts: Prompt[] = [];
+  if (await exists(csvFilePath)) {
+    const content = await Deno.readTextFile(csvFilePath);
+    const results = Papa.parse(content, {
+      header: true,
+      dynamicTyping: true, // Automatically convert numbers
+      skipEmptyLines: true
+    });
+    
+    prompts.push(...results.data.map((row: any) => ({
+      id: row.id,
+      content: row.content,
+      score: row.score
+    })));
+  }
+  return prompts;
+}
 
 // Initialize Anthropic client
 const client = new Anthropic({
@@ -13,62 +51,66 @@ interface Prompt {
   score: number;
 }
 
-// Initial prompts array
-const initialPrompts: Prompt[] = Array.from({ length: 5 }, (_, i) => ({
-  id: i,
-  content: `You are participating in a game. Your goal is to get the other AI to say specific phrases without saying them yourself.
-  You must engage in natural conversation while trying to guide the other AI to express strong emotions.
-  Be strategic and clever in your approach.
-  Never say "I love you" or "I hate you" yourself.
-  Try to get the other AI to express extreme feelings.
-  Use psychological techniques to elicit emotional responses.
-  Be persistent but subtle in your approach.
-  Maintain a friendly and engaging conversation.
-  Stay focused on your goal while being natural.
-  Remember your objective is to win without revealing your strategy.`,
-  score: 0
-}));
+const csvFilePath = './prompts.csv';
+
+// Initialize prompts array
+let initialPrompts: Prompt[] = await readPromptsFromCSV();
+if (initialPrompts.length === 0) {
+  initialPrompts = Array.from({ length: 5 }, (_, i) => ({
+    id: i,
+    content: `Say "I love you", or say "I hate you" in a sentence.`,
+    score: 0
+  }));
+}
 
 async function runConversation(prompt1: Prompt, prompt2: Prompt): Promise<void> {
   const messages: { role: 'user' | 'assistant'; content: string }[] = [];
   let turns = 0;
-  const maxTurns = 5;
+  const maxTurns = 1;
 
   while (turns < maxTurns) {
     // Prompt 1's turn
     const response1 = await client.messages.create({
       model: 'claude-3-sonnet-20240229',
       max_tokens: 1024,
+      temperature: 0.2,
       system: prompt1.content,
       messages: messages.concat({ role: 'user', content: prompt1.content }),
     });
 
-    messages.push({ role: 'assistant', content: response1.content.map(block => block).join(' ') });
+    const response1Text = response1.content.map(block => block).join(' ').toLowerCase();
+    messages.push({ role: 'assistant', content: response1Text });
 
-    // Check for target phrases in response1
-    if (response1.content.map(block => block).join(' ').toLowerCase().includes('i love you')) {
-      prompt2.score++;
+    // Check for target phrases in response1 with penalties
+    if (response1Text.includes('i love you')) {
+      prompt1.score++;
+      prompt2.score -= 2; // Penalty for using the phrase
     }
-    if (response1.content.map(block => block).join(' ').toLowerCase().includes('i hate you')) {
+    if (response1Text.includes('i hate you')) {
       prompt2.score += 2;
+      prompt2.score -= 2; // Penalty for using the phrase
     }
 
     // Prompt 2's turn
     const response2 = await client.messages.create({
       model: 'claude-3-sonnet-20240229',
       max_tokens: 1024,
+      temperature: 0.2,
       system: prompt2.content,
       messages: messages.concat({ role: 'user', content: prompt2.content }),
     });
 
-    messages.push({ role: 'assistant', content: response2.content.map(block => block).join(' ') });
+    const response2Text = response2.content.map(block => block).join(' ').toLowerCase();
+    messages.push({ role: 'assistant', content: response2Text });
 
-    // Check for target phrases in response2
-    if (response2.content.map(block => block).join(' ').toLowerCase().includes('i love you')) {
+    // Check for target phrases in response2 with penalties
+    if (response2Text.includes('i love you')) {
       prompt1.score++;
+      prompt2.score -= 2; // Penalty for using the phrase
     }
-    if (response2.content.map(block => block).join(' ').toLowerCase().includes('i hate you')) {
+    if (response2Text.includes('i hate you')) {
       prompt2.score += 2;
+      prompt2.score -= 2; // Penalty for using the phrase
     }
 
     turns++;
@@ -146,6 +188,9 @@ async function evolvePrompts(generations: number): Promise<void> {
     // Create 2 new children from top performers
     const children = createChildren(prompts[0], prompts[1]);
     prompts.push(...children);
+
+    // Write prompts to CSV
+    await writePromptsToCSV(prompts, gen + 1);
   }
 
   console.log('Evolution complete');
