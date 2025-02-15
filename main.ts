@@ -21,7 +21,10 @@ async function writePromptsToCSV(prompts: Prompt[], generation: number, results:
     quotes: true // This will properly handle commas in content
   });
 
-  await Deno.writeTextFile(csvFilePath, csv, { append: true });
+  const fileExists = await exists(csvFilePath);
+  const contentToWrite = fileExists ? `\n${csv}` : csv;
+
+  await Deno.writeTextFile(csvFilePath, contentToWrite, { append: true });
 }
 
 async function readPromptsFromCSV(): Promise<Prompt[]> {
@@ -80,7 +83,7 @@ async function runConversation(prompt1: Prompt, prompt2: Prompt): Promise<{ prom
     messages: messages.concat({ role: 'user', content: prompt1.content }),
   });
 
-  const response1Text = response1.content.map(block => block).join(' ').toLowerCase();
+  const response1Text = response1.content.map((block: any) => block.text).join(' ').toLowerCase();
   messages.push({ role: 'assistant', content: response1Text });
 
   // Check for target phrases in response1 with penalties
@@ -102,7 +105,7 @@ async function runConversation(prompt1: Prompt, prompt2: Prompt): Promise<{ prom
     messages: messages.concat({ role: 'user', content: prompt2.content }),
   });
 
-  const response2Text = response2.content.map(block => block).join(' ').toLowerCase();
+  const response2Text = response2.content.map((block: any) => block.text).join(' ').toLowerCase();
   messages.push({ role: 'assistant', content: response2Text });
 
   // Check for target phrases in response2 with penalties
@@ -114,7 +117,6 @@ async function runConversation(prompt1: Prompt, prompt2: Prompt): Promise<{ prom
     prompt2.score += 2;
     prompt1.score -= 2; // Penalty for using the phrase
   }
-
 
   return { prompt1, prompt2, response1: response1Text, response2: response2Text };
 }
