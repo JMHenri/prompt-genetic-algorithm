@@ -185,8 +185,8 @@ async function evolvePrompts(generations: number): Promise<void> {
   let prompts = [...initialPrompts];
 
   for (let gen = 0; gen < generations; gen++) {
-    console.log(`Generation ${gen + 1}`);
-    
+    console.log(`Starting generation ${gen + 1}`); // Added logging
+
     // Reset scores for new generation
     prompts.forEach(p => p.score = 0);
     
