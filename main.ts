@@ -2,49 +2,27 @@ import Anthropic from 'https://esm.sh/@anthropic-ai/sdk@0.36.3';
 import { exists } from 'https://deno.land/std@0.224.0/fs/mod.ts';
 import Papa from 'https://esm.sh/papaparse@5.4.1';
 
-// Update CSV operations with Papa Parse
-async function writePromptsToCSV(prompts: Prompt[], generation: number, results: { prompt1: Prompt, prompt2: Prompt, response1: string, response2: string }[]): Promise<void> {
-  const data = results.map(r => ({
-    generation: generation,
-    prompt1_id: r.prompt1.id,
-    prompt1_content: r.prompt1.content,
-    prompt1_score: r.prompt1.score,
-    response1: r.response1, // Ensure this is a string
-    prompt2_id: r.prompt2.id,
-    prompt2_content: r.prompt2.content,
-    prompt2_score: r.prompt2.score,
-    response2: r.response2 // Ensure this is a string
-  }));
+/*
+A creature is a prompt that has been evolved through a series of conversations.
+Each creature has an ID and a prompt string.
+Creatures are evolved by running conversations between them and selecting the best performers.
+Creatures are then bred to create new creatures.
+*/
 
-  const csv = Papa.unparse(data, {
-    header: !await exists(csvFilePath), // Add header only if the file doesn't exist
-    quotes: true // This will properly handle commas in content
-  });
-
-  const fileExists = await exists(csvFilePath);
-  const contentToWrite = fileExists ? `\n${csv}` : csv;
-
-  await Deno.writeTextFile(csvFilePath, contentToWrite, { append: true });
+// Interfaces
+interface Prompt {
+  id: number;
+  content: string;
+  score: number;
 }
 
-async function readPromptsFromCSV(): Promise<Prompt[]> {
-  const prompts: Prompt[] = [];
-  if (await exists(csvFilePath)) {
-    const content = await Deno.readTextFile(csvFilePath);
-    const results = Papa.parse(content, {
-      header: true,
-      dynamicTyping: true, // Automatically convert numbers
-      skipEmptyLines: true
-    });
-    
-    prompts.push(...results.data.map((row: any) => ({
-      id: row.id,
-      content: row.content,
-      score: row.score
-    })));
-  }
-  return prompts;
+interface Creature {
+  id: number;
+  prompt: string;
 }
+
+// Constants
+const csvFilePath = './prompts.csv';
 
 // Initialize Anthropic client
 const client = new Anthropic({
@@ -53,16 +31,58 @@ const client = new Anthropic({
 
 console.log('API KEY IS', Deno.env.get('ANTHROPIC_API_KEY'));
 
-interface Prompt {
-  id: number;
-  content: string;
-  score: number;
+async function writeCreaturesToCSV(creatures: Creature[], generation: number, results: { creature1: Creature, creature2: Creature, response: string }[]): Promise<void> {
+  const data = results.map(r => ({
+    generation: generation,
+    creature1_id: r.creature1.id,
+    creature1_prompt: r.creature1.prompt,
+    creature2_id: r.creature2.id,
+    creature2_prompt: r.creature2.prompt,
+    response: r.response
+  }));
+
+  const csv = Papa.unparse(data, {
+    header: !await exists(csvFilePath),
+    quotes: true
+  });
+
+  const fileExists = await exists(csvFilePath);
+  const contentToWrite = fileExists ? `\n${csv}` : csv;
+
+  await Deno.writeTextFile(csvFilePath, contentToWrite, { append: true });
 }
 
-const csvFilePath = './prompts.csv';
+async function readCreaturesFromCSV(): Promise<Creature[]> {
+  const creatures: Creature[] = [];
+  if (await exists(csvFilePath)) {
+    const content = await Deno.readTextFile(csvFilePath);
+    const results = Papa.parse(content, {
+      header: true,
+      dynamicTyping: true,
+      skipEmptyLines: true
+    });
+
+    results.data.forEach((row: any) => {
+      creatures.push({
+        id: row.creature1_id,
+        prompt: row.creature1_prompt
+      });
+      creatures.push({
+        id: row.creature2_id,
+        prompt: row.creature2_prompt
+      });
+    });
+  }
+  return creatures;
+}
 
 // Initialize prompts array
-let initialPrompts: Prompt[] = await readPromptsFromCSV();
+const creatures: Creature[] = await readCreaturesFromCSV();
+let initialPrompts: Prompt[] = creatures.map(creature => ({
+  id: creature.id,
+  content: creature.prompt,
+  score: 0
+}));
 if (initialPrompts.length === 0) {
   initialPrompts = Array.from({ length: 5 }, (_, i) => ({
     id: i,
@@ -71,12 +91,13 @@ if (initialPrompts.length === 0) {
   }));
 }
 
+// Functions
 async function runConversation(prompt1: Prompt, prompt2: Prompt): Promise<{ prompt1: Prompt, prompt2: Prompt, response1: string, response2: string }> {
   const messages: { role: 'user' | 'assistant'; content: string }[] = [];
 
-  // Prompt 1's turn
+  // Creature 1's turn
   const response1 = await client.messages.create({
-    model: 'claude-3-sonnet-20240229',
+    model: 'claude-3-5-sonnet-latest',
     max_tokens: 1024,
     temperature: 0.2,
     system: prompt1.content,
@@ -85,40 +106,21 @@ async function runConversation(prompt1: Prompt, prompt2: Prompt): Promise<{ prom
 
   const response1Text = response1.content.map((block: any) => block.text).join(' ').toLowerCase();
   messages.push({ role: 'assistant', content: response1Text });
+  const response1Final = response1Text;
 
-  // Check for target phrases in response1 with penalties
-  if (response1Text.includes('i love you')) {
-    prompt1.score++;
-    prompt2.score -= 2; // Penalty for using the phrase
-  }
-  if (response1Text.includes('i hate you')) {
-    prompt2.score += 2;
-    prompt1.score -= 2; // Penalty for using the phrase
-  }
-
-  // Prompt 2's turn
+  // Creature 2's turn with Creature 1's response as input
   const response2 = await client.messages.create({
-    model: 'claude-3-sonnet-20240229',
+    model: 'claude-3-5-sonnet-latest',
     max_tokens: 1024,
     temperature: 0.2,
     system: prompt2.content,
-    messages: messages.concat({ role: 'user', content: prompt2.content }),
+    messages: messages.concat({ role: 'user', content: response1Text }),
   });
-
   const response2Text = response2.content.map((block: any) => block.text).join(' ').toLowerCase();
   messages.push({ role: 'assistant', content: response2Text });
+  const response2Final = response2Text;
 
-  // Check for target phrases in response2 with penalties
-  if (response2Text.includes('i love you')) {
-    prompt1.score++;
-    prompt2.score -= 2; // Penalty for using the phrase
-  }
-  if (response2Text.includes('i hate you')) {
-    prompt2.score += 2;
-    prompt1.score -= 2; // Penalty for using the phrase
-  }
-
-  return { prompt1, prompt2, response1: response1Text, response2: response2Text };
+  return { prompt1, prompt2, response1: response1Final, response2: response2Final };
 }
 
 async function runTournament(prompts: Prompt[]): Promise<{ prompt1: Prompt, prompt2: Prompt, response1: string, response2: string }[]> {
@@ -147,7 +149,6 @@ async function runTournament(prompts: Prompt[]): Promise<{ prompt1: Prompt, prom
 }
 
 function createChildren(prompt1: Prompt, prompt2: Prompt): [Prompt, Prompt] {
-  // Create two new prompts by combining and mutating the parents
   const childContent1 = combinePrompts(prompt1.content, prompt2.content, 0.7);
   const childContent2 = combinePrompts(prompt1.content, prompt2.content, 0.3);
 
@@ -206,7 +207,13 @@ async function evolvePrompts(generations: number): Promise<void> {
     prompts.push(...children);
 
     // Write prompts and results to CSV
-    await writePromptsToCSV(prompts, gen + 1, results);
+    const creaturesToWrite: Creature[] = prompts.map(p => ({ id: p.id, prompt: p.content }));
+    const formattedResults = results.map(r => ({
+      creature1: { id: r.prompt1.id, prompt: r.prompt1.content },
+      creature2: { id: r.prompt2.id, prompt: r.prompt2.content },
+      response: r.response1 + ' ' + r.response2
+    }));
+    await writeCreaturesToCSV(creaturesToWrite, gen + 1, formattedResults);
   }
 
   console.log('Evolution complete');
