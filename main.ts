@@ -3,6 +3,7 @@ import { exists } from 'https://deno.land/std@0.224.0/fs/mod.ts';
 import Papa from 'https://esm.sh/papaparse@5.4.1';
 import { RequestThrottle } from './helpers.ts';
 import pLimit from 'https://esm.sh/p-limit@6.2.0';
+import { Prompt, Creature } from './types.ts';
 
 const throttle = new RequestThrottle(30); // Example: 30 requests per minute
 
@@ -13,28 +14,22 @@ Creatures are evolved by running conversations between them and selecting the be
 Creatures are then bred to create new creatures.
 */
 
-// Interfaces
-interface Prompt {
-  id: number;
-  content: string;
-  score: number;
-}
-
-interface Creature {
-  id: number;
-  prompt: string;
-}
-
 // Constants
 const csvFilePath = './prompts.csv';
 
 // Initialize Anthropic client
 const client = new Anthropic({
-  apiKey: Deno.env.get('ANTHROPIC_API_KEY') || '', 
+  apiKey: Deno.env.get('ANTHROPIC_API_KEY') || '',
 });
 
 console.log('API KEY IS', Deno.env.get('ANTHROPIC_API_KEY'));
 
+/**
+ * Writes the creatures and their results to a CSV file.
+ * @param creatures - The array of creatures to write.
+ * @param generation - The current generation number.
+ * @param results - The results of the conversations.
+ */
 async function writeCreaturesToCSV(creatures: Creature[], generation: number, results: { creature1: Creature, creature2: Creature, response: string }[]): Promise<void> {
   const data = results.map(r => ({
     generation: generation,
@@ -56,6 +51,10 @@ async function writeCreaturesToCSV(creatures: Creature[], generation: number, re
   await Deno.writeTextFile(csvFilePath, contentToWrite, { append: true });
 }
 
+/**
+ * Reads creatures from a CSV file.
+ * @returns An array of creatures.
+ */
 async function readCreaturesFromCSV(): Promise<Creature[]> {
   const creatures: Creature[] = [];
   if (await exists(csvFilePath)) {
@@ -95,7 +94,12 @@ if (initialPrompts.length === 0) {
   }));
 }
 
-// Functions
+/**
+ * Runs a conversation between two prompts.
+ * @param prompt1 - The first prompt.
+ * @param prompt2 - The second prompt.
+ * @returns The results of the conversation.
+ */
 async function runConversation(prompt1: Prompt, prompt2: Prompt): Promise<{ prompt1: Prompt, prompt2: Prompt, response1: string, response2: string }> {
   const messages: { role: 'user' | 'assistant'; content: string }[] = [];
 
@@ -112,7 +116,6 @@ async function runConversation(prompt1: Prompt, prompt2: Prompt): Promise<{ prom
   messages.push({ role: 'assistant', content: response1Text });
   const response1Final = response1Text;
 
-  console.log("making request for creature 2");
   // Creature 2's turn with Creature 1's response as input
   const response2 = await client.messages.create({
     model: 'claude-3-5-sonnet-latest',
@@ -128,6 +131,11 @@ async function runConversation(prompt1: Prompt, prompt2: Prompt): Promise<{ prom
   return { prompt1, prompt2, response1: response1Final, response2: response2Final };
 }
 
+/**
+ * Runs a tournament between all prompts with a concurrency limit.
+ * @param prompts - The array of prompts to run the tournament on.
+ * @returns The results of the tournament.
+ */
 async function runTournament(prompts: Prompt[]): Promise<{ prompt1: Prompt, prompt2: Prompt, response1: string, response2: string }[]> {
   const limit = pLimit(2); // Set concurrency limit to 2
   const attackPromises: (() => Promise<{ prompt1: Prompt, prompt2: Prompt, response1: string, response2: string }>)[] = [];
@@ -153,6 +161,12 @@ async function runTournament(prompts: Prompt[]): Promise<{ prompt1: Prompt, prom
   return results;
 }
 
+/**
+ * Creates two children prompts by combining the content of two parent prompts.
+ * @param prompt1 - The first parent prompt.
+ * @param prompt2 - The second parent prompt.
+ * @returns An array containing two child prompts.
+ */
 function createChildren(prompt1: Prompt, prompt2: Prompt): [Prompt, Prompt] {
   const childContent1 = combinePrompts(prompt1.content, prompt2.content, 0.7);
   const childContent2 = combinePrompts(prompt1.content, prompt2.content, 0.3);
@@ -171,6 +185,13 @@ function createChildren(prompt1: Prompt, prompt2: Prompt): [Prompt, Prompt] {
   ];
 }
 
+/**
+ * Combines the content of two prompts based on a given ratio.
+ * @param prompt1 - The first prompt.
+ * @param prompt2 - The second prompt.
+ * @param ratio - The ratio to combine the prompts.
+ * @returns The combined prompt content.
+ */
 function combinePrompts(prompt1: string, prompt2: string, ratio: number): string {
   const sentences1 = prompt1.split('.');
   const sentences2 = prompt2.split('.');
@@ -186,6 +207,10 @@ function combinePrompts(prompt1: string, prompt2: string, ratio: number): string
   return combined.join('.') + '.';
 }
 
+/**
+ * Evolves the prompts over a specified number of generations.
+ * @param generations - The number of generations to evolve the prompts.
+ */
 async function evolvePrompts(generations: number): Promise<void> {
   let prompts = [...initialPrompts];
 
