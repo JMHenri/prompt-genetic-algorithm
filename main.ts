@@ -1,6 +1,10 @@
 import Anthropic from 'https://esm.sh/@anthropic-ai/sdk@0.36.3';
 import { exists } from 'https://deno.land/std@0.224.0/fs/mod.ts';
 import Papa from 'https://esm.sh/papaparse@5.4.1';
+import { RequestThrottle } from './helpers.ts';
+import pLimit from 'https://esm.sh/p-limit@6.2.0';
+
+const throttle = new RequestThrottle(30); // Example: 30 requests per minute
 
 /*
 A creature is a prompt that has been evolved through a series of conversations.
@@ -108,6 +112,7 @@ async function runConversation(prompt1: Prompt, prompt2: Prompt): Promise<{ prom
   messages.push({ role: 'assistant', content: response1Text });
   const response1Final = response1Text;
 
+  console.log("making request for creature 2");
   // Creature 2's turn with Creature 1's response as input
   const response2 = await client.messages.create({
     model: 'claude-3-5-sonnet-latest',
@@ -124,7 +129,8 @@ async function runConversation(prompt1: Prompt, prompt2: Prompt): Promise<{ prom
 }
 
 async function runTournament(prompts: Prompt[]): Promise<{ prompt1: Prompt, prompt2: Prompt, response1: string, response2: string }[]> {
-  const attackPromises: Promise<{ prompt1: Prompt, prompt2: Prompt, response1: string, response2: string }>[] = [];
+  const limit = pLimit(2); // Set concurrency limit to 2
+  const attackPromises: (() => Promise<{ prompt1: Prompt, prompt2: Prompt, response1: string, response2: string }>)[] = [];
 
   for (let i = 0; i < prompts.length; i++) {
     const attackTargets = [
@@ -133,17 +139,16 @@ async function runTournament(prompts: Prompt[]): Promise<{ prompt1: Prompt, prom
     ];
 
     for (const target of attackTargets) {
-      attackPromises.push(runConversation(prompts[i], prompts[target]));
+      attackPromises.push(() => runConversation(prompts[i], prompts[target]));
     }
   }
 
-  // Run attacks in parallel
-  const concurrencyLimit = 2;
+  // Run attacks with concurrency limit
   const results: { prompt1: Prompt, prompt2: Prompt, response1: string, response2: string }[] = [];
-  for (let i = 0; i < attackPromises.length; i += concurrencyLimit) {
-    const batchResults = await Promise.all(attackPromises.slice(i, i + concurrencyLimit));
-    results.push(...batchResults);
-  }
+  const limitedPromises = attackPromises.map(promise => limit(promise));
+
+  const batchResults = await Promise.all(limitedPromises);
+  results.push(...batchResults);
 
   return results;
 }

@@ -215,7 +215,8 @@
     }
   },
   "redirects": {
-    "https://esm.sh/@types/papaparse@~5.3.15/index.d.ts": "https://esm.sh/@types/papaparse@5.3.15/index.d.ts"
+    "https://esm.sh/@types/papaparse@~5.3.15/index.d.ts": "https://esm.sh/@types/papaparse@5.3.15/index.d.ts",
+    "https://esm.sh/yocto-queue@^1.1.1?target=denonext": "https://esm.sh/yocto-queue@1.1.1?target=denonext"
   },
   "remote": {
     "https://deno.land/std@0.224.0/assert/assert.ts": "09d30564c09de846855b7b071e62b5974b001bb72a4b797958fe0660e7849834",
@@ -313,8 +314,12 @@
     "https://esm.sh/@anthropic-ai/sdk@0.36.3/denonext/uploads.mjs": "b3b8dc0dcb06030ab46ef40116149fc34150c668c89f5838b304cb7ff7b55666",
     "https://esm.sh/@anthropic-ai/sdk@0.36.3/denonext/version.mjs": "104b8f5662f7da709509d955811b7be8804719b6def7b1ce2206362429197f7d",
     "https://esm.sh/@anthropic-ai/sdk@0.36.3/resources/index.js": "335537e6aa3c47b04e97554bde19c4c4b0f69c282e6e10df6d1952b90cb451ff",
+    "https://esm.sh/p-limit@6.2.0": "59f60bb63e7c2d716cf58b6ae0b7c6d18ade183d98bbd63d7f74896cb82e6707",
+    "https://esm.sh/p-limit@6.2.0/denonext/p-limit.mjs": "f5196babb3f7fa8bf51e83410c2fa70f610f3e8972bc4ea4ba9cf29d9cfd2f80",
     "https://esm.sh/papaparse@5.4.1": "219ba0c48cb54e9dff897b36f769042c63a965083bcde16e0a06e11fbd22c185",
-    "https://esm.sh/papaparse@5.4.1/denonext/papaparse.mjs": "6fe398c5882dd70175d388f39e25200bf9e54395eeb5fa96dd6640ca8e1806ee"
+    "https://esm.sh/papaparse@5.4.1/denonext/papaparse.mjs": "6fe398c5882dd70175d388f39e25200bf9e54395eeb5fa96dd6640ca8e1806ee",
+    "https://esm.sh/yocto-queue@1.1.1/denonext/yocto-queue.mjs": "69c359a2415b22bac91f6a8b2008c7c1bdc79fef6e7bb143378ed882c13ba260",
+    "https://esm.sh/yocto-queue@1.1.1?target=denonext": "e5db806b3c867fa9f0c73b6c2d7a3628c53c42b0d3d63929f40604bc99f94408"
   },
   "workspace": {
     "dependencies": [
