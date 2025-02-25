@@ -168,8 +168,8 @@ async function runTournament(prompts: Prompt[]): Promise<{ prompt1: Prompt, prom
  * @returns An array containing two child prompts.
  */
 function createChildren(prompt1: Prompt, prompt2: Prompt): [Prompt, Prompt] {
-  const childContent1 = combinePrompts(prompt1.content, prompt2.content, 0.7);
-  const childContent2 = combinePrompts(prompt1.content, prompt2.content, 0.3);
+  const childContent1 = `breed child 1: ${prompt1.content} ${prompt2.content}`;
+  const childContent2 = `breed child 2: ${prompt1.content} ${prompt2.content}`;
 
   return [
     {
