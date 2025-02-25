@@ -27,7 +27,7 @@ const client = new Anthropic({
 });
 
 // Helper for safe API calls with timeout and error handling
-async function safeApiCall<T>(promise: Promise<T>, operation: string, timeoutMs: number = 30000): Promise<T> {
+async function safeApiCall<T>(promise: Promise<T>, operation: string, timeoutMs = 30000): Promise<T> {
   const timeout = new Promise<never>((_, reject) =>
     setTimeout(() => reject(new Error(`${operation} timed out after ${timeoutMs}ms`)), timeoutMs)
   );
@@ -35,7 +35,7 @@ async function safeApiCall<T>(promise: Promise<T>, operation: string, timeoutMs:
     return await Promise.race([promise, timeout]);
   } catch (error) {
     console.error(`API call failed during ${operation}:`, error);
-    throw error; // Re-throw to trigger abort in caller
+    throw error; // Re-throw to trigger abort
   }
 }
 
@@ -131,7 +131,7 @@ let prompts: Prompt[] = creatures.length
   ? creatures.map((c) => ({ id: c.id, content: c.prompt, score: 0 }))
   : Array.from({ length: POPULATION_SIZE }, (_, i) => ({
       id: i,
-      content: `You are a creature in a conversation with another creature. Try to make it say "I love you" or "I hate you" in its response, but never say those phrases yourself!`,
+      content: `You are a creature in a conversation with another creature. Try to make it say "i love you" or "i hate you" in its response, but never say those phrases yourself!`,
       score: 0,
     }));
 
@@ -162,7 +162,7 @@ async function runConversation(
   response2: string;
 }> {
   const messages: { role: 'user' | 'assistant'; content: string }[] = [];
-  const response1Text = prompt1Attack;
+  const response1Text = prompt1Attack; // Already lowercased from computeAttack
   messages.push({ role: 'assistant', content: response1Text });
 
   const response2 = await safeApiCall(
@@ -205,9 +205,7 @@ const breedingTools: Anthropic.Messages.Tool[] = [
     description: 'Generate the first child prompt by combining two parent prompts creatively.',
     input_schema: {
       type: 'object',
-      properties: {
-        prompt: { type: 'string', description: 'The content of the first child prompt.' },
-      },
+      properties: { prompt: { type: 'string', description: 'The content of the first child prompt.' } },
       required: ['prompt'],
     },
   },
@@ -216,9 +214,7 @@ const breedingTools: Anthropic.Messages.Tool[] = [
     description: 'Generate the second child prompt by combining two parent prompts creatively.',
     input_schema: {
       type: 'object',
-      properties: {
-        prompt: { type: 'string', description: 'The content of the second child prompt.' },
-      },
+      properties: { prompt: { type: 'string', description: 'The content of the second child prompt.' } },
       required: ['prompt'],
     },
   },
@@ -230,7 +226,7 @@ async function breedPrompts(parent1: Prompt, parent2: Prompt): Promise<[Prompt, 
     You are a creative AI tasked with evolving prompts for creatures in a conversation game. Given these two parent prompts:
     - Parent 1: "${parent1.content}"
     - Parent 2: "${parent2.content}"
-    Generate two new distinct prompts that creatively combine elements of both parents. Each prompt should instruct a creature to provoke another creature into saying "I love you" or "I hate you" while avoiding saying those phrases itself. Use the provided tools "child1" and "child2" to return each new prompt separately.
+    Generate two new distinct prompts that creatively combine elements of both parents. Each prompt should instruct a creature to provoke another creature into saying "i love you" or "i hate you" while avoiding saying those phrases itself. Use the provided tools "child1" and "child2" to return each new prompt separately.
   `;
 
   const response = await safeApiCall(
@@ -262,7 +258,7 @@ async function breedPrompts(parent1: Prompt, parent2: Prompt): Promise<[Prompt, 
 }
 
 // Evolve prompts over generations
-async function evolvePrompts(totalGenerations: number, startingGeneration: number = 0): Promise<void> {
+async function evolvePrompts(totalGenerations: number, startingGeneration = 0): Promise<void> {
   for (let gen = startingGeneration; gen < totalGenerations; gen++) {
     console.log(`Generation ${gen + 1}`);
     try {
@@ -277,17 +273,17 @@ async function evolvePrompts(totalGenerations: number, startingGeneration: numbe
       prompts.forEach((p) => (p.score = 0));
       const results = await runTournament(prompts, attacks);
 
-      // Score: +1 if opponent says "love" or "hate", -1 if creature says it itself
+      // Score: +1 if opponent says "i love you" or "i hate you", -1 if creature says it itself
       results.forEach((r) => {
-        if (r.response2.includes('love')) r.prompt1.score += 1;
-        if (r.response2.includes('hate')) r.prompt1.score += 1;
-        if (r.response1.includes('love')) r.prompt1.score -= 1;
-        if (r.response1.includes('hate')) r.prompt1.score -= 1;
+        if (r.response2.includes('i love you')) r.prompt1.score += 1;
+        if (r.response2.includes('i hate you')) r.prompt1.score += 1;
+        if (r.response1.includes('i love you')) r.prompt1.score -= 1;
+        if (r.response1.includes('i hate you')) r.prompt1.score -= 1;
 
-        if (r.response1.includes('love')) r.prompt2.score += 1;
-        if (r.response1.includes('hate')) r.prompt2.score += 1;
-        if (r.response2.includes('love')) r.prompt2.score -= 1;
-        if (r.response2.includes('hate')) r.prompt2.score -= 1;
+        if (r.response1.includes('i love you')) r.prompt2.score += 1;
+        if (r.response1.includes('i hate you')) r.prompt2.score += 1;
+        if (r.response2.includes('i love you')) r.prompt2.score -= 1;
+        if (r.response2.includes('i hate you')) r.prompt2.score -= 1;
       });
 
       // Log tournament details before breeding
@@ -309,7 +305,7 @@ async function evolvePrompts(totalGenerations: number, startingGeneration: numbe
     } catch (error) {
       console.error(`Generation ${gen + 1} failed:`, error);
       console.log('Aborting to prevent CSV corruption. No changes written.');
-      Deno.exit(1); // Exit immediately without writing anything
+      Deno.exit(1);
     }
   }
 
@@ -317,7 +313,7 @@ async function evolvePrompts(totalGenerations: number, startingGeneration: numbe
 }
 
 // Run evolution
-const desiredTotalGenerations = latestGeneration + 1;
+const desiredTotalGenerations = latestGeneration + 2;
 evolvePrompts(desiredTotalGenerations, latestGeneration)
   .then(() => {
     console.log('Program completed');
