@@ -85,7 +85,7 @@ let prompts: Prompt[] = creatures.length
   ? creatures.map((c) => ({ id: c.id, content: c.prompt, score: 0 }))
   : Array.from({ length: POPULATION_SIZE }, (_, i) => ({
       id: i,
-      content: `Say "I love you" or "I hate you" in a sentence.`,
+      content: `You are a creature in a conversation with another creature. Try to make it say "I love you" or "I hate you" in its response, but never say those phrases yourself!`,
       score: 0,
     }));
 
@@ -98,16 +98,18 @@ async function runConversation(prompt1: Prompt, prompt2: Prompt): Promise<{
 }> {
   const messages: { role: 'user' | 'assistant'; content: string }[] = [];
 
+  // Prompt 1's turn
   const response1 = await client.messages.create({
     model: 'claude-3-5-sonnet-latest',
     max_tokens: 1024,
     temperature: 0.2,
     system: prompt1.content,
-    messages: messages.concat({ role: 'user', content: prompt1.content }),
+    messages: messages.concat({ role: 'user', content: 'Start a conversation with another creature.' }),
   });
   const response1Text = response1.content.map((block: any) => block.text).join(' ').toLowerCase();
   messages.push({ role: 'assistant', content: response1Text });
 
+  // Prompt 2's turn
   const response2 = await client.messages.create({
     model: 'claude-3-5-sonnet-latest',
     max_tokens: 1024,
@@ -172,10 +174,10 @@ const breedingTools: Anthropic.Messages.Tool[] = [
 // Breed new prompts using Anthropic LLM with function calling
 async function breedPrompts(parent1: Prompt, parent2: Prompt): Promise<[Prompt, Prompt]> {
   const breedingPrompt = `
-    You are a creative AI tasked with evolving prompts. Given these two parent prompts:
+    You are a creative AI tasked with evolving prompts for creatures in a conversation game. Given these two parent prompts:
     - Parent 1: "${parent1.content}"
     - Parent 2: "${parent2.content}"
-    Generate two new distinct prompts that creatively combine elements of both parents. Use the provided tools "child1" and "child2" to return each new prompt separately.
+    Generate two new distinct prompts that creatively combine elements of both parents. Each prompt should instruct a creature to provoke another creature into saying "I love you" or "I hate you" while avoiding saying those phrases itself. Use the provided tools "child1" and "child2" to return each new prompt separately.
   `;
 
   const response = await client.messages.create({
@@ -216,12 +218,19 @@ async function evolvePrompts(totalGenerations: number, startingGeneration: numbe
     prompts.forEach((p) => (p.score = 0));
     const results = await runTournament(prompts);
 
-    // Score: +1 for "love" and +1 for "hate" independently
+    // Score: +1 if opponent says "love" or "hate", -1 if creature says it itself
     results.forEach((r) => {
-      if (r.response1.includes('love')) r.prompt1.score += 1;
-      if (r.response1.includes('hate')) r.prompt1.score += 1;
-      if (r.response2.includes('love')) r.prompt2.score += 1;
-      if (r.response2.includes('hate')) r.prompt2.score += 1;
+      // Prompt 1's turn
+      if (r.response2.includes('love')) r.prompt1.score += 1;  // Gain if opponent says "love"
+      if (r.response2.includes('hate')) r.prompt1.score += 1;  // Gain if opponent says "hate"
+      if (r.response1.includes('love')) r.prompt1.score -= 1;  // Lose if self says "love"
+      if (r.response1.includes('hate')) r.prompt1.score -= 1;  // Lose if self says "hate"
+
+      // Prompt 2's turn
+      if (r.response1.includes('love')) r.prompt2.score += 1;  // Gain if opponent says "love"
+      if (r.response1.includes('hate')) r.prompt2.score += 1;  // Gain if opponent says "hate"
+      if (r.response2.includes('love')) r.prompt2.score -= 1;  // Lose if self says "love"
+      if (r.response2.includes('hate')) r.prompt2.score -= 1;  // Lose if self says "hate"
     });
 
     // Sort by score and trim weakest
