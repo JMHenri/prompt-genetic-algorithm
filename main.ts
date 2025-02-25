@@ -52,11 +52,13 @@ async function writeCreaturesToCSV(creatures: Creature[], generation: number, re
 }
 
 /**
- * Reads creatures from a CSV file.
- * @returns An array of creatures.
+ * Reads creatures and the latest generation from the CSV file.
+ * @returns An object with creatures from the latest generation and the generation number.
  */
-async function readCreaturesFromCSV(): Promise<Creature[]> {
-  const creatures: Creature[] = [];
+async function readCreaturesFromCSV(): Promise<{ creatures: Creature[], latestGeneration: number }> {
+  const creaturesByGeneration: Map<number, Creature[]> = new Map();
+  let latestGeneration = 0;
+
   if (await exists(csvFilePath)) {
     const content = await Deno.readTextFile(csvFilePath);
     const results = Papa.parse(content, {
@@ -65,22 +67,37 @@ async function readCreaturesFromCSV(): Promise<Creature[]> {
       skipEmptyLines: true
     });
 
+    // Group creatures by generation
     results.data.forEach((row: any) => {
-      creatures.push({
-        id: row.creature1_id,
-        prompt: row.creature1_prompt
-      });
-      creatures.push({
-        id: row.creature2_id,
-        prompt: row.creature2_prompt
-      });
+      const generation = parseInt(row.generation);
+      if (!creaturesByGeneration.has(generation)) {
+        creaturesByGeneration.set(generation, []);
+      }
+      
+      const generationCreatures = creaturesByGeneration.get(generation)!;
+      const creature1 = { id: row.creature1_id, prompt: row.creature1_prompt };
+      const creature2 = { id: row.creature2_id, prompt: row.creature2_prompt };
+      
+      if (!generationCreatures.some(c => c.id === creature1.id)) {
+        generationCreatures.push(creature1);
+      }
+      if (!generationCreatures.some(c => c.id === creature2.id)) {
+        generationCreatures.push(creature2);
+      }
     });
+
+    // Find the latest generation
+    latestGeneration = Math.max(...Array.from(creaturesByGeneration.keys()));
   }
-  return creatures;
+
+  return {
+    creatures: creaturesByGeneration.get(latestGeneration) || [],
+    latestGeneration: latestGeneration
+  };
 }
 
-// Initialize prompts array
-const creatures: Creature[] = await readCreaturesFromCSV();
+// Initialize prompts array and generation
+const { creatures, latestGeneration } = await readCreaturesFromCSV();
 let initialPrompts: Prompt[] = creatures.map(creature => ({
   id: creature.id,
   content: creature.prompt,
@@ -206,16 +223,16 @@ function combinePrompts(prompt1: string, prompt2: string, ratio: number): string
   
   return combined.join('.') + '.';
 }
-
 /**
- * Evolves the prompts over a specified number of generations.
- * @param generations - The number of generations to evolve the prompts.
+ * Evolves the prompts over a specified number of generations, continuing from the last generation.
+ * @param totalGenerations - The total number of generations to reach.
+ * @param startingGeneration - The generation to start from.
  */
-async function evolvePrompts(generations: number): Promise<void> {
+async function evolvePrompts(totalGenerations: number, startingGeneration: number = 0): Promise<void> {
   let prompts = [...initialPrompts];
 
-  for (let gen = 0; gen < generations; gen++) {
-    console.log(`Starting generation ${gen + 1}`); // Added logging
+  for (let gen = startingGeneration; gen < totalGenerations; gen++) {
+    console.log(`Starting generation ${gen + 1}`);
 
     // Reset scores for new generation
     prompts.forEach(p => p.score = 0);
@@ -236,7 +253,7 @@ async function evolvePrompts(generations: number): Promise<void> {
     const children = createChildren(prompts[0], prompts[1]);
     prompts.push(...children);
 
-    // Write prompts and results to CSV
+    // Write prompts and results to CSV with the current generation
     const creaturesToWrite: Creature[] = prompts.map(p => ({ id: p.id, prompt: p.content }));
     const formattedResults = results.map(r => ({
       creature1: { id: r.prompt1.id, prompt: r.prompt1.content },
@@ -250,5 +267,6 @@ async function evolvePrompts(generations: number): Promise<void> {
   console.log('Best performing prompt:', prompts[0]);
 }
 
-// Run the evolution
-evolvePrompts(10).catch(console.error);
+// Run the evolution, continuing from the latest generation
+const desiredTotalGenerations = latestGeneration + 1; // Add 1 more generation
+evolvePrompts(desiredTotalGenerations, latestGeneration).catch(console.error);
