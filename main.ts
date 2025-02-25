@@ -26,6 +26,19 @@ const client = new Anthropic({
   apiKey: Deno.env.get('ANTHROPIC_API_KEY') || '',
 });
 
+// Helper for safe API calls with timeout and error handling
+async function safeApiCall<T>(promise: Promise<T>, operation: string, timeoutMs: number = 30000): Promise<T> {
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error(`${operation} timed out after ${timeoutMs}ms`)), timeoutMs)
+  );
+  try {
+    return await Promise.race([promise, timeout]);
+  } catch (error) {
+    console.error(`API call failed during ${operation}:`, error);
+    throw error; // Re-throw to trigger abort in caller
+  }
+}
+
 // Helper to write the population to CSV (after breeding)
 async function writePopulationToCSV(creatures: Creature[], generation: number): Promise<void> {
   const data = creatures.map((creature) => ({
@@ -53,7 +66,6 @@ async function writeTournamentToCSV(
   const data: any[] = [];
   const opponents = new Map<number, { attackedBy: number[]; responses: string[] }>();
 
-  // Aggregate opponent and response data
   tournamentResults.forEach((r) => {
     const p1Id = r.prompt1.id;
     const p2Id = r.prompt2.id;
@@ -62,11 +74,9 @@ async function writeTournamentToCSV(
     opponents.get(p2Id)!.attackedBy.push(p1Id);
     opponents.get(p2Id)!.responses.push(r.response2);
 
-    // For completeness, track p1’s opponents when it’s attacked (not used here since attack is precomputed)
     if (!opponents.has(p1Id)) opponents.set(p1Id, { attackedBy: [], responses: [] });
   });
 
-  // Build CSV rows
   prompts.forEach((p) => {
     const opp = opponents.get(p.id) || { attackedBy: [], responses: [] };
     data.push({
@@ -127,13 +137,16 @@ let prompts: Prompt[] = creatures.length
 
 // Compute a single attack response for a prompt
 async function computeAttack(prompt: Prompt): Promise<string> {
-  const response = await client.messages.create({
-    model: 'claude-3-5-sonnet-latest',
-    max_tokens: 1024,
-    temperature: 0.2,
-    system: prompt.content,
-    messages: [{ role: 'user', content: 'Start a conversation with another creature.' }],
-  });
+  const response = await safeApiCall(
+    client.messages.create({
+      model: 'claude-3-5-sonnet-latest',
+      max_tokens: 1024,
+      temperature: 0.2,
+      system: prompt.content,
+      messages: [{ role: 'user', content: 'Start a conversation with another creature.' }],
+    }),
+    `computeAttack for prompt ${prompt.id}`
+  );
   return response.content.map((block: any) => block.text).join(' ').toLowerCase();
 }
 
@@ -152,13 +165,16 @@ async function runConversation(
   const response1Text = prompt1Attack;
   messages.push({ role: 'assistant', content: response1Text });
 
-  const response2 = await client.messages.create({
-    model: 'claude-3-5-sonnet-latest',
-    max_tokens: 1024,
-    temperature: 0.2,
-    system: prompt2.content,
-    messages: messages.concat({ role: 'user', content: response1Text }),
-  });
+  const response2 = await safeApiCall(
+    client.messages.create({
+      model: 'claude-3-5-sonnet-latest',
+      max_tokens: 1024,
+      temperature: 0.2,
+      system: prompt2.content,
+      messages: messages.concat({ role: 'user', content: response1Text }),
+    }),
+    `runConversation response for prompt ${prompt2.id}`
+  );
   const response2Text = response2.content.map((block: any) => block.text).join(' ').toLowerCase();
 
   return { prompt1, prompt2, response1: response1Text, response2: response2Text };
@@ -217,14 +233,17 @@ async function breedPrompts(parent1: Prompt, parent2: Prompt): Promise<[Prompt, 
     Generate two new distinct prompts that creatively combine elements of both parents. Each prompt should instruct a creature to provoke another creature into saying "I love you" or "I hate you" while avoiding saying those phrases itself. Use the provided tools "child1" and "child2" to return each new prompt separately.
   `;
 
-  const response = await client.messages.create({
-    model: 'claude-3-5-sonnet-latest',
-    max_tokens: 500,
-    temperature: 0.7,
-    system: 'You are a prompt-breeding expert.',
-    messages: [{ role: 'user', content: breedingPrompt }],
-    tools: breedingTools,
-  });
+  const response = await safeApiCall(
+    client.messages.create({
+      model: 'claude-3-5-sonnet-latest',
+      max_tokens: 500,
+      temperature: 0.7,
+      system: 'You are a prompt-breeding expert.',
+      messages: [{ role: 'user', content: breedingPrompt }],
+      tools: breedingTools,
+    }),
+    `breedPrompts for parents ${parent1.id} and ${parent2.id}`
+  );
 
   let child1Content = `${parent1.content} (fallback)`;
   let child2Content = `${parent2.content} (fallback)`;
@@ -246,47 +265,52 @@ async function breedPrompts(parent1: Prompt, parent2: Prompt): Promise<[Prompt, 
 async function evolvePrompts(totalGenerations: number, startingGeneration: number = 0): Promise<void> {
   for (let gen = startingGeneration; gen < totalGenerations; gen++) {
     console.log(`Generation ${gen + 1}`);
+    try {
+      // Precompute attacks for all prompts
+      const attacks = new Map<number, string>();
+      for (const prompt of prompts) {
+        const attack = await computeAttack(prompt);
+        attacks.set(prompt.id, attack);
+      }
 
-    // Precompute attacks for all prompts (once per generation)
-    const attacks = new Map<number, string>();
-    for (const prompt of prompts) {
-      const attack = await computeAttack(prompt);
-      attacks.set(prompt.id, attack);
+      // Reset scores and run tournament
+      prompts.forEach((p) => (p.score = 0));
+      const results = await runTournament(prompts, attacks);
+
+      // Score: +1 if opponent says "love" or "hate", -1 if creature says it itself
+      results.forEach((r) => {
+        if (r.response2.includes('love')) r.prompt1.score += 1;
+        if (r.response2.includes('hate')) r.prompt1.score += 1;
+        if (r.response1.includes('love')) r.prompt1.score -= 1;
+        if (r.response1.includes('hate')) r.prompt1.score -= 1;
+
+        if (r.response1.includes('love')) r.prompt2.score += 1;
+        if (r.response1.includes('hate')) r.prompt2.score += 1;
+        if (r.response2.includes('love')) r.prompt2.score -= 1;
+        if (r.response2.includes('hate')) r.prompt2.score -= 1;
+      });
+
+      // Log tournament details before breeding
+      console.log('Tournament Scores:', prompts.map((p) => `ID ${p.id}: ${p.score}`).join(', '));
+      await writeTournamentToCSV(gen + 1, prompts, attacks, results);
+
+      // Sort by score, keep top 3 (2 die)
+      prompts.sort((a, b) => b.score - a.score);
+      const survivors = prompts.slice(0, POPULATION_SIZE - 2);
+
+      // Breed 2 new children from top 2 survivors
+      const children = await breedPrompts(survivors[0], survivors[1]);
+      prompts = [...survivors, ...children];
+
+      // Log final population (3 survivors + 2 children)
+      const creaturesToWrite: Creature[] = prompts.map((p) => ({ id: p.id, prompt: p.content }));
+      console.log(`Population at end of Generation ${gen + 1}:`, creaturesToWrite.map((c) => `ID ${c.id}: ${c.prompt}`).join('\n'));
+      await writePopulationToCSV(creaturesToWrite, gen + 1);
+    } catch (error) {
+      console.error(`Generation ${gen + 1} failed:`, error);
+      console.log('Aborting to prevent CSV corruption. No changes written.');
+      Deno.exit(1); // Exit immediately without writing anything
     }
-
-    // Reset scores and run tournament
-    prompts.forEach((p) => (p.score = 0));
-    const results = await runTournament(prompts, attacks);
-
-    // Score: +1 if opponent says "love" or "hate", -1 if creature says it itself
-    results.forEach((r) => {
-      if (r.response2.includes('love')) r.prompt1.score += 1;
-      if (r.response2.includes('hate')) r.prompt1.score += 1;
-      if (r.response1.includes('love')) r.prompt1.score -= 1;
-      if (r.response1.includes('hate')) r.prompt1.score -= 1;
-
-      if (r.response1.includes('love')) r.prompt2.score += 1;
-      if (r.response1.includes('hate')) r.prompt2.score += 1;
-      if (r.response2.includes('love')) r.prompt2.score -= 1;
-      if (r.response2.includes('hate')) r.prompt2.score -= 1;
-    });
-
-    // Log tournament details before breeding
-    console.log('Tournament Scores:', prompts.map((p) => `ID ${p.id}: ${p.score}`).join(', '));
-    await writeTournamentToCSV(gen + 1, prompts, attacks, results);
-
-    // Sort by score, keep top 3 (2 die)
-    prompts.sort((a, b) => b.score - a.score);
-    prompts = prompts.slice(0, POPULATION_SIZE - 2);
-
-    // Breed 2 new children from top 2 survivors
-    const children = await breedPrompts(prompts[0], prompts[1]);
-    prompts.push(...children);
-
-    // Log final population (3 survivors + 2 children)
-    const creaturesToWrite: Creature[] = prompts.map((p) => ({ id: p.id, prompt: p.content }));
-    console.log(`Population at end of Generation ${gen + 1}:`, creaturesToWrite.map((c) => `ID ${c.id}: ${c.prompt}`).join('\n'));
-    await writePopulationToCSV(creaturesToWrite, gen + 1);
   }
 
   console.log('Evolution complete. Best prompt:', prompts[0]);
@@ -300,6 +324,6 @@ evolvePrompts(desiredTotalGenerations, latestGeneration)
     Deno.exit(0);
   })
   .catch((err) => {
-    console.error('Error:', err);
+    console.error('Fatal error outside evolvePrompts:', err);
     Deno.exit(1);
   });
