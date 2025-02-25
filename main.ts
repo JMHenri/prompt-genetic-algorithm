@@ -2,7 +2,7 @@ import Anthropic from 'https://esm.sh/@anthropic-ai/sdk@0.36.3';
 import { exists } from 'https://deno.land/std@0.224.0/fs/mod.ts';
 import Papa from 'https://esm.sh/papaparse@5.4.1';
 import pLimit from 'https://esm.sh/p-limit@6.2.0';
-import { createHash } from 'https://deno.land/std@0.224.0/hash/mod.ts';
+import * as crypto from 'node:crypto';
 
 // Types
 interface Prompt {
@@ -29,7 +29,7 @@ const client = new Anthropic({
 
 // Helper to generate a 4-character ID from prompt content
 function generateId(content: string): string {
-  const hash = createHash('md5').update(content).toString();
+  const hash = crypto.createHash('md5').update(content).digest('hex');
   return hash.slice(-4).toLowerCase();
 }
 
