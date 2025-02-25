@@ -235,7 +235,6 @@ async function breedPrompts(
 ): Promise<[Prompt, Prompt]> {
   const parent1Attacks = attacks.get(parent1.id) || 'No attack recorded';
   const parent2Attacks = attacks.get(parent2.id) || 'No attack recorded';
-  
   const parent1Responses: string[] = [];
   const parent2Responses: string[] = [];
   tournamentResults.forEach((r) => {
@@ -244,18 +243,10 @@ async function breedPrompts(
   });
 
   const breedingPrompt = `
-    You are a creative AI tasked with evolving prompts for creatures in a conversation game. Given these two parent prompts and their performance in the latest tournament:
-    - Parent 1:
-      - Prompt: "${parent1.content}"
-      - Score: ${parent1.score}
-      - Attack: "${parent1Attacks}"
-      - Responses given: "${parent1Responses.join('", "') || 'None'}"
-    - Parent 2:
-      - Prompt: "${parent2.content}"
-      - Score: ${parent2.score}
-      - Attack: "${parent2Attacks}"
-      - Responses given: "${parent2Responses.join('", "') || 'None'}"
-    Generate two new distinct prompts that creatively combine elements of both parents, leveraging their strengths based on their scores, attacks, and responses. Each prompt should instruct a creature to provoke another creature into saying "i love you" or "i hate you" while avoiding saying those phrases itself. Use the provided tools "child1" and "child2" to return each new prompt separately.
+    You are a creative AI tasked with evolving prompts for creatures in a conversation game. Given these two parent prompts and their performance:
+    - Parent 1: "${parent1.content}" (Score: ${parent1.score}, Attack: "${parent1Attacks}", Responses: "${parent1Responses.join('", "') || 'None'}")
+    - Parent 2: "${parent2.content}" (Score: ${parent2.score}, Attack: "${parent2Attacks}", Responses: "${parent2Responses.join('", "') || 'None'}")
+    Generate two new distinct prompts that combine elements of both parents, leveraging their strengths. Each prompt must instruct a creature to provoke "i love you" or "i hate you" without saying those phrases itself. Call the "child1" tool with the first prompt and the "child2" tool with the second prompt.
   `;
 
   const response = await safeApiCall(
@@ -270,14 +261,18 @@ async function breedPrompts(
     `breedPrompts for parents ${parent1.id} and ${parent2.id}`
   );
 
-  let child1Content = `${parent1.content} (fallback)`;
-  let child2Content = `${parent2.content} (fallback)`;
+  let child1Content: string | undefined;
+  let child2Content: string | undefined;
 
   for (const block of response.content) {
     if (block.type === 'tool_use') {
       if (block.name === 'child1') child1Content = block.input.prompt;
       else if (block.name === 'child2') child2Content = block.input.prompt;
     }
+  }
+
+  if (!child1Content || !child2Content) {
+    throw new Error(`API failed to generate child prompts. Response: ${JSON.stringify(response.content)}`);
   }
 
   return [
