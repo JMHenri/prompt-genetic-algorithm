@@ -137,32 +137,69 @@ async function runTournament(prompts: Prompt[]): Promise<
   return Promise.all(attackPromises.map((p) => limit(p)));
 }
 
-// Breed new prompts using Anthropic LLM
+// Define tools (functions) for Anthropic to call
+const breedingTools: Anthropic.Messages.Tool[] = [
+  {
+    name: 'child1',
+    description: 'Generate the first child prompt by combining two parent prompts creatively.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        prompt: {
+          type: 'string',
+          description: 'The content of the first child prompt.',
+        },
+      },
+      required: ['prompt'],
+    },
+  },
+  {
+    name: 'child2',
+    description: 'Generate the second child prompt by combining two parent prompts creatively.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        prompt: {
+          type: 'string',
+          description: 'The content of the second child prompt.',
+        },
+      },
+      required: ['prompt'],
+    },
+  },
+];
+
+// Breed new prompts using Anthropic LLM with function calling
 async function breedPrompts(parent1: Prompt, parent2: Prompt): Promise<[Prompt, Prompt]> {
   const breedingPrompt = `
     You are a creative AI tasked with evolving prompts. Given these two parent prompts:
     - Parent 1: "${parent1.content}"
     - Parent 2: "${parent2.content}"
-    Generate two new prompts that combine elements of both parents in a creative way. Each new prompt should be distinct and suitable for generating interesting responses. Return them as "Child 1: [prompt]" and "Child 2: [prompt]".
+    Generate two new distinct prompts that creatively combine elements of both parents. Use the provided tools "child1" and "child2" to return each new prompt separately.
   `;
 
   const response = await client.messages.create({
     model: 'claude-3-5-sonnet-latest',
     max_tokens: 500,
-    temperature: 0.7, // Higher temp for creativity
+    temperature: 0.7,
     system: 'You are a prompt-breeding expert.',
     messages: [{ role: 'user', content: breedingPrompt }],
+    tools: breedingTools,
   });
 
-  const responseText = response.content.map((block: any) => block.text).join('\n');
-  const lines = responseText.split('\n').filter((line) => line.trim());
-  
-  // Parse the response for two children
-  const child1Match = lines.find((line) => line.startsWith('Child 1:'));
-  const child2Match = lines.find((line) => line.startsWith('Child 2:'));
-  
-  const child1Content = child1Match ? child1Match.replace('Child 1:', '').trim() : `${parent1.content} (fallback)`;
-  const child2Content = child2Match ? child2Match.replace('Child 2:', '').trim() : `${parent2.content} (fallback)`;
+  // Extract tool calls from response
+  let child1Content = `${parent1.content} (fallback)`;
+  let child2Content = `${parent2.content} (fallback)`;
+
+  for (const block of response.content) {
+    if (block.type === 'tool_use') {
+      if (block.name === 'child1') {
+        child1Content = block.input.prompt;
+      } else if (block.name === 'child2') {
+        child2Content = block.input.prompt;
+      }
+    }
+  }
 
   return [
     { id: parent1.id, content: child1Content, score: 0 },
@@ -179,10 +216,12 @@ async function evolvePrompts(totalGenerations: number, startingGeneration: numbe
     prompts.forEach((p) => (p.score = 0));
     const results = await runTournament(prompts);
 
-    // Simple scoring: +1 for each response containing "love" or "hate"
+    // Score: +1 for "love" and +1 for "hate" independently
     results.forEach((r) => {
-      if (r.response1.includes('love') || r.response1.includes('hate')) r.prompt1.score++;
-      if (r.response2.includes('love') || r.response2.includes('hate')) r.prompt2.score++;
+      if (r.response1.includes('love')) r.prompt1.score += 1;
+      if (r.response1.includes('hate')) r.prompt1.score += 1;
+      if (r.response2.includes('love')) r.prompt2.score += 1;
+      if (r.response2.includes('hate')) r.prompt2.score += 1;
     });
 
     // Sort by score and trim weakest
@@ -190,7 +229,7 @@ async function evolvePrompts(totalGenerations: number, startingGeneration: numbe
     console.log('Scores:', prompts.map((p) => `ID ${p.id}: ${p.score}`).join(', '));
     prompts = prompts.slice(0, POPULATION_SIZE - 2);
 
-    // Breed new prompts from top two using LLM
+    // Breed new prompts from top two using LLM with function calling
     const children = await breedPrompts(prompts[0], prompts[1]);
     prompts.push(...children);
 
