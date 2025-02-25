@@ -16,7 +16,7 @@ interface Creature {
 }
 
 // Constants
-const CSV_FILE_PATH = './prompts.csv';
+const CSV_FILE_PATH = './population.csv'; // Updated to a more specific name
 const POPULATION_SIZE = 5;
 const CONCURRENCY_LIMIT = 2;
 
@@ -25,19 +25,12 @@ const client = new Anthropic({
   apiKey: Deno.env.get('ANTHROPIC_API_KEY') || '',
 });
 
-// Helper to write creatures and results to CSV
-async function writeCreaturesToCSV(
-  creatures: Creature[],
-  generation: number,
-  results: { creature1: Creature; creature2: Creature; response: string }[]
-): Promise<void> {
-  const data = results.map((r) => ({
+// Helper to write the population to CSV
+async function writePopulationToCSV(creatures: Creature[], generation: number): Promise<void> {
+  const data = creatures.map((creature) => ({
     generation,
-    creature1_id: r.creature1.id,
-    creature1_prompt: r.creature1.prompt,
-    creature2_id: r.creature2.id,
-    creature2_prompt: r.creature2.prompt,
-    response: r.response,
+    id: creature.id,
+    prompt: creature.prompt,
   }));
 
   const csv = Papa.unparse(data, {
@@ -61,13 +54,7 @@ async function readCreaturesFromCSV(): Promise<{ creatures: Creature[]; latestGe
     results.data.forEach((row: any) => {
       const generation = parseInt(row.generation);
       creaturesByGeneration.set(generation, creaturesByGeneration.get(generation) || []);
-
-      const generationCreatures = creaturesByGeneration.get(generation)!;
-      const creature1 = { id: row.creature1_id, prompt: row.creature1_prompt };
-      const creature2 = { id: row.creature2_id, prompt: row.creature2_prompt };
-
-      if (!generationCreatures.some((c) => c.id === creature1.id)) generationCreatures.push(creature1);
-      if (!generationCreatures.some((c) => c.id === creature2.id)) generationCreatures.push(creature2);
+      creaturesByGeneration.get(generation)!.push({ id: row.id, prompt: row.prompt });
     });
 
     latestGeneration = Math.max(...Array.from(creaturesByGeneration.keys()));
@@ -98,7 +85,6 @@ async function runConversation(prompt1: Prompt, prompt2: Prompt): Promise<{
 }> {
   const messages: { role: 'user' | 'assistant'; content: string }[] = [];
 
-  // Prompt 1's turn
   const response1 = await client.messages.create({
     model: 'claude-3-5-sonnet-latest',
     max_tokens: 1024,
@@ -109,7 +95,6 @@ async function runConversation(prompt1: Prompt, prompt2: Prompt): Promise<{
   const response1Text = response1.content.map((block: any) => block.text).join(' ').toLowerCase();
   messages.push({ role: 'assistant', content: response1Text });
 
-  // Prompt 2's turn
   const response2 = await client.messages.create({
     model: 'claude-3-5-sonnet-latest',
     max_tokens: 1024,
@@ -189,7 +174,6 @@ async function breedPrompts(parent1: Prompt, parent2: Prompt): Promise<[Prompt, 
     tools: breedingTools,
   });
 
-  // Extract tool calls from response
   let child1Content = `${parent1.content} (fallback)`;
   let child2Content = `${parent2.content} (fallback)`;
 
@@ -220,36 +204,30 @@ async function evolvePrompts(totalGenerations: number, startingGeneration: numbe
 
     // Score: +1 if opponent says "love" or "hate", -1 if creature says it itself
     results.forEach((r) => {
-      // Prompt 1's turn
-      if (r.response2.includes('love')) r.prompt1.score += 1;  // Gain if opponent says "love"
-      if (r.response2.includes('hate')) r.prompt1.score += 1;  // Gain if opponent says "hate"
-      if (r.response1.includes('love')) r.prompt1.score -= 1;  // Lose if self says "love"
-      if (r.response1.includes('hate')) r.prompt1.score -= 1;  // Lose if self says "hate"
+      if (r.response2.includes('love')) r.prompt1.score += 1;
+      if (r.response2.includes('hate')) r.prompt1.score += 1;
+      if (r.response1.includes('love')) r.prompt1.score -= 1;
+      if (r.response1.includes('hate')) r.prompt1.score -= 1;
 
-      // Prompt 2's turn
-      if (r.response1.includes('love')) r.prompt2.score += 1;  // Gain if opponent says "love"
-      if (r.response1.includes('hate')) r.prompt2.score += 1;  // Gain if opponent says "hate"
-      if (r.response2.includes('love')) r.prompt2.score -= 1;  // Lose if self says "love"
-      if (r.response2.includes('hate')) r.prompt2.score -= 1;  // Lose if self says "hate"
+      if (r.response1.includes('love')) r.prompt2.score += 1;
+      if (r.response1.includes('hate')) r.prompt2.score += 1;
+      if (r.response2.includes('love')) r.prompt2.score -= 1;
+      if (r.response2.includes('hate')) r.prompt2.score -= 1;
     });
 
-    // Sort by score and trim weakest
+    // Sort by score, keep top 3 (2 die)
     prompts.sort((a, b) => b.score - a.score);
-    console.log('Scores:', prompts.map((p) => `ID ${p.id}: ${p.score}`).join(', '));
-    prompts = prompts.slice(0, POPULATION_SIZE - 2);
+    console.log('Tournament Scores:', prompts.map((p) => `ID ${p.id}: ${p.score}`).join(', '));
+    prompts = prompts.slice(0, POPULATION_SIZE - 2); // Keep top 3
 
-    // Breed new prompts from top two using LLM with function calling
+    // Breed 2 new children from top 2 survivors
     const children = await breedPrompts(prompts[0], prompts[1]);
     prompts.push(...children);
 
-    // Write to CSV
+    // Log the final population (3 survivors + 2 children)
     const creaturesToWrite: Creature[] = prompts.map((p) => ({ id: p.id, prompt: p.content }));
-    const formattedResults = results.map((r) => ({
-      creature1: { id: r.prompt1.id, prompt: r.prompt1.content },
-      creature2: { id: r.prompt2.id, prompt: r.prompt2.content },
-      response: `${r.response1} | ${r.response2}`,
-    }));
-    await writeCreaturesToCSV(creaturesToWrite, gen + 1, formattedResults);
+    console.log(`Population at end of Generation ${gen + 1}:`, creaturesToWrite.map((c) => `ID ${c.id}: ${c.prompt}`).join('\n'));
+    await writePopulationToCSV(creaturesToWrite, gen + 1);
   }
 
   console.log('Evolution complete. Best prompt:', prompts[0]);
