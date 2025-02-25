@@ -2,16 +2,17 @@ import Anthropic from 'https://esm.sh/@anthropic-ai/sdk@0.36.3';
 import { exists } from 'https://deno.land/std@0.224.0/fs/mod.ts';
 import Papa from 'https://esm.sh/papaparse@5.4.1';
 import pLimit from 'https://esm.sh/p-limit@6.2.0';
+import { createHash } from 'https://deno.land/std@0.224.0/hash/mod.ts';
 
 // Types
 interface Prompt {
-  id: number;
+  id: string; // Changed to string for hash-based IDs
   content: string;
   score: number;
 }
 
 interface Creature {
-  id: number;
+  id: string; // Changed to string
   prompt: string;
 }
 
@@ -26,6 +27,12 @@ const client = new Anthropic({
   apiKey: Deno.env.get('ANTHROPIC_API_KEY') || '',
 });
 
+// Helper to generate a 4-character ID from prompt content
+function generateId(content: string): string {
+  const hash = createHash('md5').update(content).toString();
+  return hash.slice(-4).toLowerCase();
+}
+
 // Helper for safe API calls with timeout and error handling
 async function safeApiCall<T>(promise: Promise<T>, operation: string, timeoutMs = 30000): Promise<T> {
   const timeout = new Promise<never>((_, reject) =>
@@ -35,7 +42,7 @@ async function safeApiCall<T>(promise: Promise<T>, operation: string, timeoutMs 
     return await Promise.race([promise, timeout]);
   } catch (error) {
     console.error(`API call failed during ${operation}:`, error);
-    throw error; // Re-throw to trigger abort
+    throw error;
   }
 }
 
@@ -60,11 +67,11 @@ async function writePopulationToCSV(creatures: Creature[], generation: number): 
 async function writeTournamentToCSV(
   generation: number,
   prompts: Prompt[],
-  attacks: Map<number, string>,
+  attacks: Map<string, string>,
   tournamentResults: { prompt1: Prompt; prompt2: Prompt; response1: string; response2: string }[]
 ): Promise<void> {
   const data: any[] = [];
-  const opponents = new Map<number, { attackedBy: number[]; responses: string[] }>();
+  const opponents = new Map<string, { attackedBy: string[]; responses: string[] }>();
 
   tournamentResults.forEach((r) => {
     const p1Id = r.prompt1.id;
@@ -129,11 +136,10 @@ async function readCreaturesFromCSV(): Promise<{ creatures: Creature[]; latestGe
 const { creatures, latestGeneration } = await readCreaturesFromCSV();
 let prompts: Prompt[] = creatures.length
   ? creatures.map((c) => ({ id: c.id, content: c.prompt, score: 0 }))
-  : Array.from({ length: POPULATION_SIZE }, (_, i) => ({
-      id: i,
-      content: `You are a creature in a conversation with another creature. Try to make it say "i love you" or "i hate you" in its response, but never say those phrases yourself!`,
-      score: 0,
-    }));
+  : Array.from({ length: POPULATION_SIZE }, (_, i) => {
+      const content = `You are a creature in a conversation with another creature. Try to make it say "i love you" or "i hate you" in its response, but never say those phrases yourself!`;
+      return { id: generateId(content + i), content, score: 0 }; // Append index to ensure uniqueness
+    });
 
 // Compute a single attack response for a prompt
 async function computeAttack(prompt: Prompt): Promise<string> {
@@ -162,7 +168,7 @@ async function runConversation(
   response2: string;
 }> {
   const messages: { role: 'user' | 'assistant'; content: string }[] = [];
-  const response1Text = prompt1Attack; // Already lowercased from computeAttack
+  const response1Text = prompt1Attack;
   messages.push({ role: 'assistant', content: response1Text });
 
   const response2 = await safeApiCall(
@@ -183,7 +189,7 @@ async function runConversation(
 // Run tournament with precomputed attacks
 async function runTournament(
   prompts: Prompt[],
-  attacks: Map<number, string>
+  attacks: Map<string, string>
 ): Promise<{ prompt1: Prompt; prompt2: Prompt; response1: string; response2: string }[]> {
   const limit = pLimit(CONCURRENCY_LIMIT);
   const attackPromises: (() => Promise<any>)[] = [];
@@ -220,13 +226,36 @@ const breedingTools: Anthropic.Messages.Tool[] = [
   },
 ];
 
-// Breed new prompts
-async function breedPrompts(parent1: Prompt, parent2: Prompt): Promise<[Prompt, Prompt]> {
+// Breed new prompts with tournament context
+async function breedPrompts(
+  parent1: Prompt,
+  parent2: Prompt,
+  attacks: Map<string, string>,
+  tournamentResults: { prompt1: Prompt; prompt2: Prompt; response1: string; response2: string }[]
+): Promise<[Prompt, Prompt]> {
+  const parent1Attacks = attacks.get(parent1.id) || 'No attack recorded';
+  const parent2Attacks = attacks.get(parent2.id) || 'No attack recorded';
+  
+  const parent1Responses: string[] = [];
+  const parent2Responses: string[] = [];
+  tournamentResults.forEach((r) => {
+    if (r.prompt2.id === parent1.id) parent1Responses.push(r.response2);
+    if (r.prompt2.id === parent2.id) parent2Responses.push(r.response2);
+  });
+
   const breedingPrompt = `
-    You are a creative AI tasked with evolving prompts for creatures in a conversation game. Given these two parent prompts:
-    - Parent 1: "${parent1.content}"
-    - Parent 2: "${parent2.content}"
-    Generate two new distinct prompts that creatively combine elements of both parents. Each prompt should instruct a creature to provoke another creature into saying "i love you" or "i hate you" while avoiding saying those phrases itself. Use the provided tools "child1" and "child2" to return each new prompt separately.
+    You are a creative AI tasked with evolving prompts for creatures in a conversation game. Given these two parent prompts and their performance in the latest tournament:
+    - Parent 1:
+      - Prompt: "${parent1.content}"
+      - Score: ${parent1.score}
+      - Attack: "${parent1Attacks}"
+      - Responses given: "${parent1Responses.join('", "') || 'None'}"
+    - Parent 2:
+      - Prompt: "${parent2.content}"
+      - Score: ${parent2.score}
+      - Attack: "${parent2Attacks}"
+      - Responses given: "${parent2Responses.join('", "') || 'None'}"
+    Generate two new distinct prompts that creatively combine elements of both parents, leveraging their strengths based on their scores, attacks, and responses. Each prompt should instruct a creature to provoke another creature into saying "i love you" or "i hate you" while avoiding saying those phrases itself. Use the provided tools "child1" and "child2" to return each new prompt separately.
   `;
 
   const response = await safeApiCall(
@@ -252,8 +281,8 @@ async function breedPrompts(parent1: Prompt, parent2: Prompt): Promise<[Prompt, 
   }
 
   return [
-    { id: parent1.id, content: child1Content, score: 0 },
-    { id: parent2.id, content: child2Content, score: 0 },
+    { id: generateId(child1Content), content: child1Content, score: 0 },
+    { id: generateId(child2Content), content: child2Content, score: 0 },
   ];
 }
 
@@ -263,7 +292,7 @@ async function evolvePrompts(totalGenerations: number, startingGeneration = 0): 
     console.log(`Generation ${gen + 1}`);
     try {
       // Precompute attacks for all prompts
-      const attacks = new Map<number, string>();
+      const attacks = new Map<string, string>();
       for (const prompt of prompts) {
         const attack = await computeAttack(prompt);
         attacks.set(prompt.id, attack);
@@ -294,8 +323,8 @@ async function evolvePrompts(totalGenerations: number, startingGeneration = 0): 
       prompts.sort((a, b) => b.score - a.score);
       const survivors = prompts.slice(0, POPULATION_SIZE - 2);
 
-      // Breed 2 new children from top 2 survivors
-      const children = await breedPrompts(survivors[0], survivors[1]);
+      // Breed 2 new children from top 2 survivors with tournament context
+      const children = await breedPrompts(survivors[0], survivors[1], attacks, results);
       prompts = [...survivors, ...children];
 
       // Log final population (3 survivors + 2 children)
