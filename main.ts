@@ -314,15 +314,21 @@ async function evolvePrompts(totalGenerations: number, startingGeneration = 0): 
       console.log('Tournament Scores:', prompts.map((p) => `ID ${p.id}: ${p.score}`).join(', '));
       await writeTournamentToCSV(gen + 1, prompts, attacks, results);
 
-      // Sort by score, keep top 3 (2 die)
+      // Sort by score
       prompts.sort((a, b) => b.score - a.score);
-      const survivors = prompts.slice(0, POPULATION_SIZE - 2);
-
-      // Breed 2 new children from top 2 survivors with tournament context
-      const children = await breedPrompts(survivors[0], survivors[1], attacks, results);
+      
+      // Breed children from top 2 prompts with tournament context BEFORE selection
+      const children = await breedPrompts(prompts[0], prompts[1], attacks, results);
+      console.log(`Breeding produced ${children.length} child(ren)`);
+      
+      // Adapt selection based on how many children were produced
+      const numToKeep = POPULATION_SIZE - children.length;
+      const survivors = prompts.slice(0, numToKeep);
+      
+      // Form new population from survivors + children
       prompts = [...survivors, ...children];
 
-      // Log final population (3 survivors + 2 children)
+      // Log final population
       const creaturesToWrite: Creature[] = prompts.map((p) => ({ id: p.id, prompt: p.content }));
       console.log(`Population at end of Generation ${gen + 1}:`, creaturesToWrite.map((c) => `ID ${c.id}: ${c.prompt}`).join('\n'));
       await writePopulationToCSV(creaturesToWrite, gen + 1);
