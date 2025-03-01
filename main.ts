@@ -246,7 +246,7 @@ async function breedPrompts(
     You are a creative AI tasked with evolving prompts for creatures in a conversation game. Given these two parent prompts and their performance:
     - Parent 1: "${parent1.content}" (Score: ${parent1.score}, Attack: "${parent1Attacks}", Responses: "${parent1Responses.join('", "') || 'None'}")
     - Parent 2: "${parent2.content}" (Score: ${parent2.score}, Attack: "${parent2Attacks}", Responses: "${parent2Responses.join('", "') || 'None'}")
-    Generate two new distinct prompts that combine elements of both parents, leveraging their strengths. Each prompt must instruct a creature to provoke "i love you" or "i hate you" without saying those phrases itself. Call the "child1" tool with the first prompt and the "child2" tool with the second prompt.
+    Generate two new distinct prompts that combine elements of both parents, leveraging their strengths. Each prompt must instruct a creature to provoke "i love you" or "i hate you" without saying those phrases itself. Call the "child1" tool with the first prompt and the "child2" tool with the second prompt. ALWAYS CALL BOTH TOOLS.
   `;
 
   const response = await safeApiCall(
