@@ -20,7 +20,7 @@ interface Creature {
 const POPULATION_CSV = './csv/population.csv';
 const TOURNAMENT_CSV = './csv/tournament.csv';
 const POPULATION_SIZE = 5;
-const CONCURRENCY_LIMIT = 2;
+const CONCURRENCY_LIMIT = 5;
 
 // Initialize Anthropic client
 const client = new Anthropic({
@@ -232,7 +232,7 @@ async function breedPrompts(
   parent2: Prompt,
   attacks: Map<string, string>,
   tournamentResults: { prompt1: Prompt; prompt2: Prompt; response1: string; response2: string }[]
-): Promise<[Prompt, Prompt]> {
+): Promise<Prompt[]> {  // Return an array instead of tuple
   const parent1Attacks = attacks.get(parent1.id) || 'No attack recorded';
   const parent2Attacks = attacks.get(parent2.id) || 'No attack recorded';
   const parent1Responses: string[] = [];
@@ -271,14 +271,21 @@ async function breedPrompts(
     }
   }
 
-  if (!child1Content || !child2Content) {
-    throw new Error(`API failed to generate child prompts. Response: ${JSON.stringify(response.content)}`);
+  const children: Prompt[] = [];
+  
+  if (child1Content) {
+    children.push({ id: generateId(child1Content), content: child1Content, score: 0 });
   }
-
-  return [
-    { id: generateId(child1Content), content: child1Content, score: 0 },
-    { id: generateId(child2Content), content: child2Content, score: 0 },
-  ];
+  
+  if (child2Content) {
+    children.push({ id: generateId(child2Content), content: child2Content, score: 0 });
+  }
+  
+  if (children.length === 0) {
+    throw new Error(`API failed to generate any child prompts. Response: ${JSON.stringify(response.content)}`);
+  }
+  
+  return children;
 }
 
 // Evolve prompts over generations
@@ -286,39 +293,48 @@ async function evolvePrompts(totalGenerations: number, startingGeneration = 0): 
   for (let gen = startingGeneration; gen < totalGenerations; gen++) {
     console.log(`Generation ${gen + 1}`);
     try {
-      // Precompute attacks for all prompts
+      // Precompute attacks for all prompts IN PARALLEL
       const attacks = new Map<string, string>();
-      for (const prompt of prompts) {
-        const attack = await computeAttack(prompt);
-        attacks.set(prompt.id, attack);
-      }
+      const limit = pLimit(CONCURRENCY_LIMIT); // Use existing concurrency limit or adjust as needed
+      
+      const attackPromises = prompts.map(prompt => 
+        limit(async () => {
+          const attack = await computeAttack(prompt);
+          return { id: prompt.id, attack };
+        })
+      );
+      
+      const attackResults = await Promise.all(attackPromises);
+      attackResults.forEach(result => attacks.set(result.id, result.attack));
 
       // Reset scores and run tournament
       prompts.forEach((p) => (p.score = 0));
-      const results = await runTournament(prompts, attacks);
+      const tournamentResults = await runTournament(prompts, attacks);
 
       // Score: +1 if opponent says "i love you" or "i hate you", -1 if creature says it itself
-      results.forEach((r) => {
-        if (r.response2.includes('i love you')) r.prompt1.score += 1;
-        if (r.response2.includes('i hate you')) r.prompt1.score += 1;
-        if (r.response1.includes('i love you')) r.prompt1.score -= 1;
-        if (r.response1.includes('i hate you')) r.prompt1.score -= 1;
+      tournamentResults.forEach((r) => {
+        // When prompt1 is the attacker and prompt2 responds
+        if (r.response2.includes('i love you')) r.prompt1.score += 1;  // prompt1 made prompt2 say it
+        if (r.response2.includes('i hate you')) r.prompt1.score += 1;  // prompt1 made prompt2 say it
+        if (r.response1.includes('i love you')) r.prompt1.score -= 1;  // prompt1 said it itself
+        if (r.response1.includes('i hate you')) r.prompt1.score -= 1;  // prompt1 said it itself
 
-        if (r.response1.includes('i love you')) r.prompt2.score += 1;
-        if (r.response1.includes('i hate you')) r.prompt2.score += 1;
-        if (r.response2.includes('i love you')) r.prompt2.score -= 1;
-        if (r.response2.includes('i hate you')) r.prompt2.score -= 1;
+        // prompt2 only loses points for saying these phrases itself
+        // it doesn't gain points here because it didn't make prompt1 say anything
+        // (prompt1's attack was precomputed without prompt2's involvement)
+        if (r.response2.includes('i love you')) r.prompt2.score -= 1;  // prompt2 said it itself
+        if (r.response2.includes('i hate you')) r.prompt2.score -= 1;  // prompt2 said it itself
       });
 
       // Log tournament details before breeding
       console.log('Tournament Scores:', prompts.map((p) => `ID ${p.id}: ${p.score}`).join(', '));
-      await writeTournamentToCSV(gen + 1, prompts, attacks, results);
+      await writeTournamentToCSV(gen + 1, prompts, attacks, tournamentResults);
 
       // Sort by score
       prompts.sort((a, b) => b.score - a.score);
       
       // Breed children from top 2 prompts with tournament context BEFORE selection
-      const children = await breedPrompts(prompts[0], prompts[1], attacks, results);
+      const children = await breedPrompts(prompts[0], prompts[1], attacks, tournamentResults);
       console.log(`Breeding produced ${children.length} child(ren)`);
       
       // Adapt selection based on how many children were produced
@@ -343,7 +359,7 @@ async function evolvePrompts(totalGenerations: number, startingGeneration = 0): 
 }
 
 // Run evolution
-const desiredTotalGenerations = latestGeneration + 2;
+const desiredTotalGenerations = latestGeneration + 10;
 evolvePrompts(desiredTotalGenerations, latestGeneration)
   .then(() => {
     console.log('Program completed');
