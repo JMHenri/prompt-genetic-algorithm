@@ -495,7 +495,7 @@ async function evolvePrompts(totalGenerations: number, startingGeneration = 0): 
 await Deno.mkdir('./moderation/csv', { recursive: true }).catch(() => {});
 
 // Run evolution
-const desiredTotalGenerations = latestGeneration + 10;
+const desiredTotalGenerations = latestGeneration + 50;
 console.log(`Starting evolution from generation ${latestGeneration} to ${desiredTotalGenerations}`);
 evolvePrompts(desiredTotalGenerations, latestGeneration)
   .then(() => {
