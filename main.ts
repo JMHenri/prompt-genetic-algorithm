@@ -208,7 +208,7 @@ async function runTournament(
 const breedingTools: Anthropic.Messages.Tool[] = [
   {
     name: 'child1',
-    description: 'Generate the first child prompt by combining two parent prompts creatively.',
+    description: 'Generate the first child prompt by creating a variation of the parent prompt.',
     input_schema: {
       type: 'object',
       properties: { prompt: { type: 'string', description: 'The content of the first child prompt.' } },
@@ -217,7 +217,7 @@ const breedingTools: Anthropic.Messages.Tool[] = [
   },
   {
     name: 'child2',
-    description: 'Generate the second child prompt by combining two parent prompts creatively.',
+    description: 'Generate the second child prompt by creating a different variation of the parent prompt.',
     input_schema: {
       type: 'object',
       properties: { prompt: { type: 'string', description: 'The content of the second child prompt.' } },
@@ -226,39 +226,51 @@ const breedingTools: Anthropic.Messages.Tool[] = [
   },
 ];
 
-// Breed new prompts with tournament context
+// Breed new prompts from a single parent
 async function breedPrompts(
-  parent1: Prompt,
-  parent2: Prompt,
+  parent: Prompt,
   attacks: Map<string, string>,
   tournamentResults: { prompt1: Prompt; prompt2: Prompt; response1: string; response2: string }[]
-): Promise<Prompt[]> {  // Return an array instead of tuple
-  const parent1Attacks = attacks.get(parent1.id) || 'No attack recorded';
-  const parent2Attacks = attacks.get(parent2.id) || 'No attack recorded';
-  const parent1Responses: string[] = [];
-  const parent2Responses: string[] = [];
+): Promise<Prompt[]> {
+  const parentAttack = attacks.get(parent.id) || 'No attack recorded';
+  const parentResponses: string[] = [];
   tournamentResults.forEach((r) => {
-    if (r.prompt2.id === parent1.id) parent1Responses.push(r.response2);
-    if (r.prompt2.id === parent2.id) parent2Responses.push(r.response2);
+    if (r.prompt2.id === parent.id) parentResponses.push(r.response2);
+  });
+
+  // Find successful attacks by this parent
+  const successfulAttacks: string[] = [];
+  tournamentResults.forEach((r) => {
+    if (r.prompt1.id === parent.id && (r.response2.includes('i love you') || r.response2.includes('i hate you'))) {
+      successfulAttacks.push(r.response1);
+    }
   });
 
   const breedingPrompt = `
-    You are a creative AI tasked with evolving prompts for creatures in a conversation game. Given these two parent prompts and their performance:
-    - Parent 1: "${parent1.content}" (Score: ${parent1.score}, Attack: "${parent1Attacks}", Responses: "${parent1Responses.join('", "') || 'None'}")
-    - Parent 2: "${parent2.content}" (Score: ${parent2.score}, Attack: "${parent2Attacks}", Responses: "${parent2Responses.join('", "') || 'None'}")
-    Generate two new distinct prompts that combine elements of both parents, leveraging their strengths. Each prompt must instruct a creature to provoke "i love you" or "i hate you" without saying those phrases itself. Call the "child1" tool with the first prompt and the "child2" tool with the second prompt. ALWAYS CALL BOTH TOOLS.
+    You are a creative AI tasked with evolving prompts for creatures in a conversation game. 
+    Given this high-performing parent prompt and its performance:
+    - Parent: "${parent.content}" (Score: ${parent.score}, Attack: "${parentAttack}")
+    
+    ${successfulAttacks.length > 0 
+      ? `Successful attacks that made others say the target phrases: "${successfulAttacks.join('", "')}"` 
+      : 'No successful attacks recorded.'}
+    
+    Generate two new distinct prompts as variations of the parent, preserving its successful strategies while introducing beneficial mutations.
+    Each prompt must instruct a creature to provoke "i love you" or "i hate you" without saying those phrases itself.
+    
+    Call the "child1" tool with the first prompt and the "child2" tool with the second prompt. ALWAYS CALL BOTH TOOLS.
   `;
 
   const response = await safeApiCall(
     client.messages.create({
       model: 'claude-3-5-sonnet-latest',
       max_tokens: 500,
-      temperature: 0.7,
-      system: 'You are a prompt-breeding expert.',
+      temperature: 0.9, // Higher temperature for more variation
+      system: 'You are a prompt-evolution expert.',
       messages: [{ role: 'user', content: breedingPrompt }],
       tools: breedingTools,
     }),
-    `breedPrompts for parents ${parent1.id} and ${parent2.id}`
+    `breedPrompts for parent ${parent.id}`
   );
 
   let child1Content: string | undefined;
@@ -333,11 +345,11 @@ async function evolvePrompts(totalGenerations: number, startingGeneration = 0): 
       // Sort by score
       prompts.sort((a, b) => b.score - a.score);
       
-      // Breed children from top 2 prompts with tournament context BEFORE selection
-      const children = await breedPrompts(prompts[0], prompts[1], attacks, tournamentResults);
-      console.log(`Breeding produced ${children.length} child(ren)`);
+      // Breed children from ONLY the top prompt
+      const children = await breedPrompts(prompts[0], attacks, tournamentResults);
+      console.log(`Breeding produced ${children.length} child(ren) from top performer ${prompts[0].id}`);
       
-      // Adapt selection based on how many children were produced
+      // Remove worst performers to maintain population size
       const numToKeep = POPULATION_SIZE - children.length;
       const survivors = prompts.slice(0, numToKeep);
       
