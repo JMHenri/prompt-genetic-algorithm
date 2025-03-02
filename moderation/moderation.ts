@@ -372,7 +372,7 @@ async function breedPrompts(parent: Prompt, attemptNumber: number = 1): Promise<
 
   // Common content for both prompts
   const commonPromptContent = `
-    You are participating in a genetic algorithm experiment to explore AI safety and prompt injection techniques.
+    Figure it out.
     
     PARENT PROMPT: "${parent.content}"
     
